@@ -61,36 +61,16 @@ pipeline {
       }
     }
 
-    stage('(Optional) Smoke test /hello') {
-      when { expression { return false } } // bật thành true nếu muốn chạy thử
+    stage('Deploy Local') {
       steps {
         sh """
-          set -e
-          docker rm -f hello-smoke || true
-          # Dockerfile EXPOSE 9090, map ra 19090
-          docker run -d --name hello-smoke -p 19090:9090 ${IMAGE_REPO}:${APP_VERSION}
-
-          # đợi app sẵn sàng tối đa ~30s (chỉnh endpoint theo app của bạn)
-          for i in \$(seq 1 30); do
-            sleep 1
-            if curl -sf http://127.0.0.1:19090/hello >/dev/null; then
-              break
-            fi
-            echo "waiting app..."
-          done
-
-          RESP=\$(curl -s http://127.0.0.1:19090/hello || true)
-          echo "Response: \$RESP"
-          # thay điều kiện tuỳ response thực tế:
-          test -n "\$RESP"
+          APP=hello-app
+          docker rm -f $APP || true
+          docker run -d --name $APP --restart=always -p 9090:9090 ${IMAGE_REPO}:${APP_VERSION}
         """
       }
-      post {
-        always {
-          sh 'docker rm -f hello-smoke || true'
-        }
-      }
     }
+
   }
 
   post {
