@@ -2,8 +2,10 @@ pipeline {
   agent any
 
   environment {
-    // đặt tên image local của bạn (tuỳ ý)
     IMAGE_REPO = 'hello-local/jenkins-pipeline-test'
+    APP_NAME   = 'hello-app'
+    APP_PORT   = '9090'      // cổng app bên trong container (khớp Dockerfile EXPOSE 9090)
+    HOST_PORT  = '9090'      // cổng publish ra host; đổi sang 19090 nếu 9090 đang bận
   }
 
   options {
@@ -14,7 +16,6 @@ pipeline {
   stages {
     stage('Checkout') {
       steps {
-        // nếu job tạo từ "Pipeline script from SCM", chỉ cần checkout scm
         checkout([$class: 'GitSCM',
           branches: [[name: '*/main']],
           userRemoteConfigs: [[url: 'https://github.com/duykhanhxx03/jenkins-pipeline-test.git']]
@@ -36,7 +37,6 @@ pipeline {
     stage('Build JAR (Maven in Docker)') {
       steps {
         sh """
-          # build bằng container maven để khỏi cài JDK/Maven trên agent
           docker run --rm \
             -v "\$PWD":/workspace -w /workspace \
             maven:3.9.8-eclipse-temurin-21 \
@@ -45,7 +45,6 @@ pipeline {
       }
       post {
         always {
-          // thu thập báo cáo test nếu có
           junit allowEmptyResults: true, testResults: 'target/surefire-reports/*.xml'
           archiveArtifacts artifacts: 'target/*.jar', fingerprint: true
         }
@@ -61,37 +60,22 @@ pipeline {
       }
     }
 
-    stage('Deploy Local') {
-      steps {
-        sh """
-          APP=hello-app
-          docker rm -f $APP || true
-          docker run -d --name $APP --restart=always -p 9090:9090 ${IMAGE_REPO}:${APP_VERSION}
-        """
-      }
-    }
-
     stage('(Optional) Smoke test /hello') {
-      when { expression { return false } } // bật thành true nếu muốn chạy thử
+      when { expression { return false } } // bật thành true nếu muốn test trước khi deploy
       steps {
         sh """
           set -e
           docker rm -f hello-smoke || true
-          # Dockerfile EXPOSE 9090, map ra 19090
-          docker run -d --name hello-smoke -p 19090:9090 ${IMAGE_REPO}:${APP_VERSION}
+          docker run -d --name hello-smoke -p 19090:${APP_PORT} ${IMAGE_REPO}:${APP_VERSION}
 
-          # đợi app sẵn sàng tối đa ~30s (chỉnh endpoint theo app của bạn)
           for i in \$(seq 1 30); do
             sleep 1
-            if curl -sf http://127.0.0.1:19090/hello >/dev/null; then
-              break
-            fi
+            if curl -sf http://127.0.0.1:19090/hello >/dev/null; then break; fi
             echo "waiting app..."
           done
 
           RESP=\$(curl -s http://127.0.0.1:19090/hello || true)
           echo "Response: \$RESP"
-          # thay điều kiện tuỳ response thực tế:
           test -n "\$RESP"
         """
       }
@@ -102,11 +86,39 @@ pipeline {
       }
     }
 
+    // ====== DEPLOY LOCAL ======
+    stage('Deploy Local') {
+      steps {
+        sh """
+          set -e
+          # dừng & xoá container cũ (nếu có)
+          docker rm -f ${APP_NAME} || true
+
+          # chạy phiên bản mới
+          docker run -d --name ${APP_NAME} --restart=always \\
+            -p ${HOST_PORT}:${APP_PORT} \\
+            ${IMAGE_REPO}:${APP_VERSION}
+
+          # health-check sau deploy (tối đa ~30s)
+          for i in \$(seq 1 30); do
+            sleep 1
+            if curl -sf http://127.0.0.1:${HOST_PORT}/hello >/dev/null; then
+              echo "App is healthy."
+              exit 0
+            fi
+            echo "waiting app after deploy..."
+          done
+
+          echo "Healthcheck failed" >&2
+          exit 1
+        """
+      }
+    }
   }
 
   post {
     success {
-      echo "✅ Built local image: ${IMAGE_REPO}:${APP_VERSION}"
+      echo "✅ Built local image: ${IMAGE_REPO}:${APP_VERSION} & deployed as ${APP_NAME} on port ${HOST_PORT}."
     }
     failure {
       echo "❌ Pipeline FAILED."
