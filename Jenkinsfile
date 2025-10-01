@@ -60,32 +60,6 @@ pipeline {
       }
     }
 
-    stage('(Optional) Smoke test /hello') {
-      when { expression { return false } } // bật thành true nếu muốn test trước khi deploy
-      steps {
-        sh """
-          set -e
-          docker rm -f hello-smoke || true
-          docker run -d --name hello-smoke -p 19090:${APP_PORT} ${IMAGE_REPO}:${APP_VERSION}
-
-          for i in \$(seq 1 30); do
-            sleep 1
-            if curl -sf http://127.0.0.1:19090/hello >/dev/null; then break; fi
-            echo "waiting app..."
-          done
-
-          RESP=\$(curl -s http://127.0.0.1:19090/hello || true)
-          echo "Response: \$RESP"
-          test -n "\$RESP"
-        """
-      }
-      post {
-        always {
-          sh 'docker rm -f hello-smoke || true'
-        }
-      }
-    }
-
     // ====== DEPLOY LOCAL ======
     stage('Deploy Local') {
       steps {
